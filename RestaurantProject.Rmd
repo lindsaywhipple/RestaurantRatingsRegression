@@ -1,7 +1,6 @@
 ---
 title: 'What Drives Restaurant Rankings'
 author: "Lindsay Whipple"
-date: "2025-12-25"
 output:
   html_document:
     toc: true
@@ -25,11 +24,6 @@ theme_set(
       legend.position = "bottom"
     )
 )
-```
-
-```{r}
-main_col <- "#3182BD"
-accent_col <- "#CC4C02"
 ```
 
 
@@ -67,6 +61,15 @@ Restaurants <- read_csv("~/Desktop/Projects/R Projects/Dataset .csv")
 
 
 ## **Data Cleaning and Feature Engineering**
+
+
+**Select Colors for Graphs:**
+```{r}
+main_col <- "#3182BD"
+accent_col <- "#CC4C02"
+```
+
+
 
 **Filter to only include restaurants in the US:**
 ```{r}
