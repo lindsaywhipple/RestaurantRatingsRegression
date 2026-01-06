@@ -1,5 +1,5 @@
 ---
-title: 'What Drives Restaurant Rankings'
+title: 'Drivers of Customer Ratings in the Restaurant Industry'
 author: "Lindsay Whipple"
 output:
   html_document:
