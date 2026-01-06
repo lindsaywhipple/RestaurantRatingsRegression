@@ -1,0 +1,638 @@
+---
+title: 'What Drives Restaurant Rankings'
+author: "Lindsay Whipple"
+date: "2025-12-25"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+
+theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.title.position = "plot",
+      axis.title = element_text(size = 12),
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
+    )
+)
+```
+
+```{r}
+main_col <- "#3182BD"
+accent_col <- "#CC4C02"
+```
+
+
+# **Introduction**
+
+
+Customer ratings play a critical role in shaping restaurant visibility, reputation, and consumer decision-making in the food and beverage industry. For restaurant operators, understanding which characteristics are more strongly associated with higher ratings can inform pricing strategies, operational decisions, and customer engagement efforts. Despite the widespread availability of online review data, the factors that meaningfully influence customer ratings remain unclear, as ratings may reflect a combination of restaurant attributes, service offerings, and customer engagement rather than food quality alone. 
+
+This project examines the relationship between restaurant characteristics and customer ratings using a publicly available data set that includes information on restaurant location, cuisine type, pricing, service features, and customer feedback. The analysis focuses primarily on a US only subset of the data to improve comparability across restaurants, with supplementary exploratory analyses conducted on the full data set to evaluate the role of service features that exhibit limited variation within the US sample.
+
+The primary outcome of interest is the aggregate customer rating. To assess potential drivers of ratings, this study evaluates the influence of pricing, cuisine type, customer engagement, and service features using a combination of exploratory data analysis, hypothesis testing, and multivariate regression. By distinguishing between raw associations and relationships that persist after controlling for engagement, this analysis aims to provide a clearer understanding of how operational context and customer interaction shape perceived restaurant quality. 
+
+
+## **Data Description**
+
+
+**Load Libraries:**
+```{r, message=FALSE, warning=FALSE}
+library(readr)
+library(tidyverse)
+library(janitor)
+library(broom)
+library(effectsize)
+library(car)
+library(lmtest)
+library(sandwich)
+```
+
+
+**Load Data Set:**
+```{r, message=FALSE, warning=FALSE}
+Restaurants <- read_csv("~/Desktop/Projects/R Projects/Dataset .csv")
+# View(Restaurants)
+```
+
+
+## **Data Cleaning and Feature Engineering**
+
+**Filter to only include restaurants in the US:**
+```{r}
+restaurants_us <- Restaurants %>%
+  filter(`Country Code` == 216)
+```
+
+
+**Remove null values (unrated restaurants):**
+```{r}
+restaurants_us_clean <- restaurants_us %>%
+  filter(`Aggregate rating` > 0)
+```
+
+
+**Recode service feature (for clarity). Currently Yes/No, change to 0/1 respectfully:**
+```{r}
+restaurants_us_clean <- restaurants_us_clean %>%
+  mutate(
+    `Has Table booking` = if_else(`Has Table booking` == "Yes", 1, 0),
+    `Has Online delivery` = if_else(`Has Online delivery` == "Yes", 1, 0),
+    `Is delivering now` = if_else(`Is delivering now` == "Yes", 1, 0),
+    `Switch to order menu` = if_else(`Switch to order menu` == "Yes", 1, 0)
+  )
+```
+
+
+**Clean and label price ranges:**
+```{r}
+restaurants_us_clean <- restaurants_us_clean %>%
+  mutate(
+    `Price range` = factor(
+      `Price range`,
+      levels = c(1, 2, 3, 4),
+      labels = c("Low", "Medium", "High", "Very High"),
+      ordered = TRUE
+    )
+  )
+```
+
+
+**Ensure each restaurant has only one cuisine:** 
+```{r}
+restaurants_us_clean <- restaurants_us_clean %>%
+  mutate(
+    primary_cuisine = str_trim(str_split(Cuisines, ",", simplify = TRUE)[,1])
+  )
+
+restaurants_us_clean <- restaurants_us_clean %>%
+  mutate(log_Votes = log(Votes + 1))
+```
+
+
+# **Research Questions and Hypotheses**
+
+
+To identify which restaurant characteristics are more strongly associated with customer ratings, the following research questions evaluate pricing, cuisine type, customer engagement, and service features using a US only subset of the data, supplemented by exploratory analyses on the full data set when required.
+
+
+**RQ1: Is restaurant pricing associated with customer ratings?**
+  
+  
+  $H_0$: Average ratings do not differ by price range 
+  
+  $H_a$: Average ratings differ by price range
+
+
+--> ANOVA and Boxplots
+
+
+  
+**RQ2: Are certain cuisines associated with higher ratings?**
+  
+  
+  $H_0$: Ratings do not differ by cuisine 
+  
+  $H_a$: Ratings differ by cuisine
+
+
+--> ANOVA 
+
+
+
+**RQ3: Is customer engagement correlated with ratings?**
+
+
+--> Correlation and Linear Regression
+
+
+
+**RQ4 (Exploratory): Do service features predict higher ratings in the full data set? (Full Data Set)**
+  
+  
+  $H_0$: Ratings are independent of service features
+  
+  $H_a$: Ratings are not independent of service features
+  
+  
+--> Two-Sample t-tests/ Linear Regression
+
+
+# **Exploratory Data Analysis**
+
+
+## **RQ1: Pricing and Customer Ratings**
+
+
+**Figure 1.1. Distribution of Restaurant Ratings (US subset):**
+```{r}
+ggplot(restaurants_us_clean, aes(x = `Aggregate rating`)) +
+  geom_histogram(binwidth = 0.1, fill = main_col, color = "white") +
+  labs(
+    title = "Distribution of Restaurant Ratings",
+    x = "Aggregate Rating",
+    y = "Number of Restaurants"
+  )
+```
+
+The distribution of aggregate restaurant ratings is moderately concentrated between approximately 3.5 and 4.5, with relatively few low-rated restaurants. This clustering suggests a potential ceiling effect, motivating the use of comparative and multivariate analyses to identify subtle differences across restaurant characteristics. 
+
+
+**Figure 1.2. Restaurant Ratings by Price Range:**
+```{r}
+ggplot(restaurants_us_clean, aes(x = `Price range`, y = `Aggregate rating`)) +
+  geom_boxplot(fill = main_col) +
+  labs(
+    title = "Restaurant Ratings by Price Range",
+    x = "Price Range",
+    y = "Aggregate Rating"
+  )
+```
+
+Boxplots of restaurant ratings across price ranges show modest differences in central tendency, with substantial overlap between groups. While higher-priced restaurants exhibit slightly higher median ratings, the overall similarity across price tiers suggests that price range alone may not strongly differentiate customer ratings. 
+
+
+**Figure 1.3. Relationship Between Customer Votes and Restaurant Ratings**
+```{r}
+ggplot(restaurants_us_clean, aes(x = Votes, y = `Aggregate rating`)) +
+  geom_point(color = main_col, alpha = 0.5) +
+  geom_smooth(method = "lm", color = accent_col, se = FALSE) +
+  labs(
+    title = "Relationship Between Customer Votes and Restaurant Ratings",
+    x = "Number of Votes",
+    y = "Aggregate Rating"
+  )
+```
+
+A positive association is observed between the number of customer votes and restaurant ratings, with higher-engagement restaurants tending to receive higher average ratings. The distribution of votes is highly right-skewed, motivating a log transformation in subsequent analyses.
+
+
+**Figure 1.4. Restaurant Ratings vs. Log(Number of Votes)**
+```{r}
+ggplot(restaurants_us_clean,
+       aes(x = log(Votes + 1), y = `Aggregate rating`)) +
+  geom_point(color = main_col, alpha = 0.5) +
+  geom_smooth(method = "lm", color = accent_col, se = FALSE) +
+  labs(
+    title = "Restaurant Ratings vs Log(Number of Votes)",
+    x = "Log(Number of Votes + 1)",
+    y = "Aggregate Rating"
+  )
+```
+
+After log-transforming customer votes, the relationship between engagement and ratings appears approximately linear, revealing a strong positive association. This visualization supports the use of correlation and linear regression to formally assess the relationship between customer engagement and restaurant ratings. 
+
+
+## **RQ2: Cuisines and Customer Ratings**
+
+
+**Filter the top three cuisines:**
+```{r}
+top_cuisines <- c("American", "Mexican", "Italian")
+
+restaurants_cuisine <- restaurants_us_clean %>%
+  filter(primary_cuisine %in% top_cuisines)
+```
+
+
+**Figure 2.1. Restaurant Ratings by Cuisine (US Subset)**
+```{r}
+ggplot(restaurants_cuisine, aes(x = primary_cuisine, y = `Aggregate rating`)) +
+  geom_boxplot(fill = main_col) +
+  labs(
+    title = "Restaurant Ratings by Primary Cuisine",
+    x = "Primary Cuisine",
+    y = "Aggregate Rating"
+  )
+```
+
+Boxplots comparing restaurant ratings across the three most common primary cuisines - American, Italian, and Mexican - show similar distributions with substantial overlap across groups. While small differences in median ratings are observable, the overall similarity suggests that cuisine type alone may not strongly differentiate customer ratings, motivating formal hypothesis testing using ANOVA.
+
+
+## **RQ3: Customer Engagement Correlation with Customer Ratings**
+
+
+**Figure 3.1. Customer Engagement Correlation:**
+```{r}
+ggplot(restaurants_cuisine, aes(x = log_Votes, y = `Aggregate rating`)) +
+  geom_point(color = main_col, alpha = 0.5) +
+  geom_smooth(method = "lm", color = accent_col, se = FALSE) +
+  annotate(
+    "text",
+    x = min(restaurants_cuisine$log_Votes, na.rm = TRUE),
+    y = max(restaurants_cuisine$`Aggregate rating`, na.rm = TRUE),
+    hjust = 0,
+    vjust = 1,
+    label = "r = 0.80\np < 0.001",
+    size = 4
+  ) +
+  labs(
+    title = "Customer Engagement and Restaurant Ratings",
+    x = "Log(Number of Votes + 1)",
+    y = "Aggregate Rating"
+  )
+```
+
+Customer engagement, measured as the log-transformed number of votes, exhibits a strong positive linear relationship with restaurant ratings ($r = 0.80$, $p < 0.001$). The log transformation was applied to reduce right-skewness in the vote distribution and to linearize the relationship, supporting the use of correlation and linear regression in subsequent analyses. 
+
+
+## **RQ4: Service Features and Customer Ratings (Full Data Set)**
+
+
+**Figure 4.1. Restaurant Ratings by Online Delivery Option:**
+```{r}
+restaurants_service <- Restaurants %>%
+  filter(`Aggregate rating` > 0) %>%
+  mutate(
+    has_online_delivery = if_else(`Has Online delivery` == "Yes", "Yes", "No")
+  )
+
+ggplot(restaurants_service,
+       aes(x = has_online_delivery, y = `Aggregate rating`)) +
+  geom_boxplot(fill = main_col) +
+  labs(
+    title = "Restaurant Ratings by Online Delivery Availability",
+    x = "Online Delivery",
+    y = "Aggregate Rating"
+  )
+```
+
+Boxplots comparing restaurant ratings by online delivery availability show a small difference in median ratings, with restaurants not offering online delivery exhibiting slightly higher ratings on average. The substantial overlap between the distributions suggests that any association between delivery availability and ratings is modest, motivating formal statistical testing.
+
+
+**Figure 4.2. Restaurant Ratings by Reservation Availability**
+```{r}
+restaurants_service <- restaurants_service %>%
+  mutate(
+    has_table_booking = if_else(`Has Table booking` == "Yes", "Yes", "No")
+  )
+
+ggplot(restaurants_service,
+       aes(x = has_table_booking, y = `Aggregate rating`)) +
+  geom_boxplot(fill = main_col) +
+  labs(
+    title = "Restaurant Ratings by Table Booking Availability",
+    x = "Table Booking",
+    y = "Aggregate Rating"
+  )
+```
+
+Restaurants offering reservations exhibit higher median customer ratings compared to restaurants without reservation availability. Although the distributions overlap, the upward shift in ratings among restaurants with reservations suggests a meaningful association between reservation capability and perceived restaurant quality, motivating formal hypothesis testing using two-sample t-tests and multivariate regression.
+
+
+**Figure 4.3. Restaurant Ratings vs. Engagement by Reservations**
+```{r}
+ggplot(restaurants_service,
+       aes(x = log(Votes + 1),
+           y = `Aggregate rating`,
+           color = has_table_booking)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(
+    values = c("No" = main_col, "Yes" = accent_col)
+  ) +
+  labs(
+    title = "Restaurant Ratings vs Engagement by Table Booking Availability",
+    x = "Log(Number of Votes + 1)",
+    y = "Aggregate Rating",
+    color = "Table Booking"
+  )
+```
+
+This figure illustrates the relationship between customer engagement and restaurant ratings, stratified by table booking availability. Ratings increase with customer engagement for both groups; however, restaurants offering reservations tend to exhibit slightly higher ratings across comparable levels of engagement. The roughly parallel trends suggest that while customer engagement is a dominant driver of ratings, reservation availability may provide an additional, incremental advantage. 
+
+
+**Figure 4.4. Density Plot: Distribution of Ratings by Reservations**
+```{r}
+ggplot(restaurants_service,
+       aes(x = `Aggregate rating`, fill = has_table_booking)) +
+  geom_density(alpha = 0.4) +
+  scale_fill_manual(
+    values = c("No" = main_col, "Yes" = accent_col)
+  ) +
+  labs(
+    title = "Distribution of Ratings by Table Booking Availability",
+    x = "Aggregate Rating",
+    fill = "Table Booking"
+  )
+```
+
+A density plot of restaurant ratings by table booking availability indicate a rightward shift in the rating distribution for restaurants offering table reservations. While the distributions overlap, restaurants with reservations available tend to receive higher ratings across much of the distribution, supporting the observed difference in mean ratings identified in subsequent hypothesis testing. 
+
+
+# **Statistical Methods**
+
+
+## **RQ1: Do average restaurant ratings differ by price range?**
+
+
+**Price ANOVA:**
+```{r}
+price_anova = aov(`Aggregate rating` ~ `Price range`, data = restaurants_us_clean)
+summary(price_anova)
+```
+
+
+**Check Assumptions:**
+```{r}
+par(mfrow = c(1,2))
+plot(price_anova, which = 1)
+plot(price_anova, which = 2)
+par(mfrow = c(1,1))
+```
+
+
+## **RQ2: Are certain cuisines associated with higher ratings?**
+
+
+**Add Log(Votes):**
+```{r}
+restaurants_us_clean = restaurants_us_clean %>%
+  mutate(log_Votes = log(Votes + 1))
+```
+
+
+**Filter Data For Top Three Primary Cuisines:**
+```{r}
+restaurants_cuisine <- restaurants_us_clean %>%
+  mutate(log_Votes = log(Votes + 1)) %>%
+  filter(primary_cuisine %in% c("American", "Mexican", "Italian"))
+```
+
+
+**Cuisine ANOVA:**
+```{r}
+restaurants_cuisine = restaurants_us_clean %>%
+  filter(primary_cuisine %in% c("American", "Mexican", "Italian"))
+
+cuisine_anova = aov(`Aggregate rating` ~ primary_cuisine, data = restaurants_cuisine)
+summary(cuisine_anova)
+```
+
+
+**Rating Linear Model:**
+```{r}
+rating_lm = lm(`Aggregate rating` ~ `Price range` + primary_cuisine + log_Votes, data = restaurants_cuisine)
+summary(rating_lm)
+```
+
+
+## **RQ3: Is customer engagement correlated with ratings?**
+
+
+**Correlation Test:**
+```{r}
+cor_test <- cor.test(
+  restaurants_cuisine$log_Votes,
+  restaurants_cuisine$`Aggregate rating`
+)
+
+cor_test
+```
+
+
+## **RQ4 (Exploratory): Do service features predict higher ratings in the full data set?**
+
+
+While the primary analyses in this study focus on U.S. restaurants to improve comparability, service feature variables exhibited no variation within the U.S. subset. To assess whether service features are associated with customer ratings, an exploratory analysis was conducted using the full data set. A two-sample t-test was used to compare mean ratings between restaurants that offer online delivery and those that do not.
+
+
+**Filter/ Create New Data Set - Add Online Delivery:**
+```{r}
+restaurants_service <- Restaurants %>%
+  filter(`Aggregate rating` > 0) %>%
+  mutate(
+    has_online_delivery = if_else(`Has Online delivery` == "Yes", 1, 0)
+  )
+
+restaurants_service %>%
+  count(has_online_delivery)
+```
+
+
+**Filter Data Set - Add Reservations:**
+```{r}
+restaurants_service <- Restaurants %>%
+  filter(`Aggregate rating` > 0) %>%
+  mutate(
+    has_table_booking = if_else(`Has Table booking` == "Yes", 1, 0)
+  )
+
+restaurants_service %>%
+  count(has_table_booking)
+```
+
+
+**t-test for Online Delivery:**
+```{r}
+t_test_delivery <- t.test(
+  `Aggregate rating` ~ `Has Online delivery`,
+  data = restaurants_service
+)
+
+t_test_delivery
+```
+
+A Welch two-sample t-test revealed a statistically significant difference in average ratings between the two groups ($t = 6.33$, $p < 0.001$).
+
+
+**t-test for Reservations:**
+```{r}
+t_test_reservations <- t.test(
+  `Aggregate rating` ~ `Has Table booking`,
+  data = restaurants_service
+)
+
+t_test_reservations
+```
+
+A Welch two-sample t-test revealed a statistically significant difference in average ratings between the two groups ($t = -9.92$, $p < 0.001$).
+
+
+**Multivariate Regression:**
+```{r}
+restaurants_service <- Restaurants %>%
+  filter(`Aggregate rating` > 0) %>%
+  mutate(
+    has_online_delivery = if_else(`Has Online delivery` == "Yes", 1, 0),
+    has_table_booking = if_else(`Has Table booking` == "Yes", 1, 0),
+    log_votes = log(Votes + 1)
+  )
+
+service_lm <- lm(
+  `Aggregate rating` ~ has_online_delivery + has_table_booking + log_votes,
+  data = restaurants_service
+)
+
+summary(service_lm)
+```
+
+Multivariate regression results show that customer engagement is strongly and positively associated with restaurant ratings ($p < 0.001$). While online delivery and table booking availability remain statistically significant after controlling for engagement, their effects are comparatively modest, and the model explains approximately 45% of the variance in ratings. 
+
+
+**Cohen's D - Online Delivery:**
+```{r}
+cohens_d(`Aggregate rating` ~ has_online_delivery, data = restaurants_service)
+```
+
+The effect size for online delivery availability is small (Cohen's $d = 0.16$), suggesting limited practical significance.
+
+
+**Cohen's D - Reservations:**
+```{r}
+# Cohen's D Reservations
+cohens_d(`Aggregate rating` ~ has_table_booking, data = restaurants_service)
+```
+
+The effect size for table booking availability is small to moderate in magnitude (Cohen's $d = -0.32$), indicating a modest practical difference.
+
+
+**Diagnostic Plots:**
+```{r}
+par(mfrow = c(2, 2))
+plot(service_lm)
+par(mfrow = c(1, 1))
+```
+
+Diagnostic plots indicate no major violations of linear regression assumptions. Residuals are approximately centered around zero with no strong patterns, variance appears reasonably constant across fitted values, and no observations exhibit excessive leverage or undue influence, suggesting the model provides an adequate fit to the data. 
+
+
+**Check Multicolinearity:**
+```{r}
+vif(service_lm)
+```
+
+Variance Inflation Factors (VIFs) for all predictors were close to 1, indicating no evidence of problematic multicollinearity among online delivery availability, table booking availability, and customer engagement. 
+
+
+**Check Heteroskedasticity:**
+```{r}
+bptest(service_lm)
+```
+
+The studentized Breusch-Pagan test indicated evidence of heteroskedasticity in the regression model (BP = 151.77, $p < 0.001$), suggesting that residual variance is not perfectly constant across fitted values. 
+
+
+# **Results**
+
+
+## **RQ1: Pricing and Ratings**
+
+
+To assess whether restaurant pricing is associated with customer ratings, an analysis of variance (ANOVA) was conducted comparing average aggregate ratings across four price range categories. The results indicated a marginal association between price range and ratings, $F(3, 427) = 2.33$, $p = 0.0737$, which was statistically significant at the 0.10 significance level, but not at the conventional 0.05 level. Visual inspection of boxplots revealed only modest differences in rating distributions across price tiers, with substantial overlap between groups. These findings suggest that while pricing may be weakly related to customer ratings, price range alone does not appear to be a strong or consistent predictor of perceived restaurant quality within the US subset of the data. 
+
+
+## **RQ2: Cuisine and Ratings**
+
+
+An ANOVA was conducted to examine whether average restaurant ratings differed across the three most frequently represented cuisine types in the US subset of the data set: American, Mexican, and Italian. The analysis did not reveal statistically significant differences in mean ratings across cuisine categories, $F(2, 164) = 1.60$, $p = 0.206$. Accordingly, the null hypothesis that ratings do not differ by cuisine type was not rejected. This result suggests that, within the US restaurant market represented in the data, cuisine type alone is not a strong determinant of customer ratings, and that perceived quality may be influenced more by factors unrelated to menu category. 
+
+
+## **RQ3: Customer Engagement**
+
+
+To examine whether customer engagement is associated with restaurant ratings, both correlation analysis and multivariate regression were conducted using the US subset of the data. Exploratory visualizations suggested a strong positive relationship between customer engagement and aggregate ratings, which was confirmed by a Pearson correlation analysis. Log-transformed customer votes were strongly and positively correlated with restaurant ratings ($r = 0.80$, $p < 0.001$), indicating that restaurants with higher levels of customer engagement tend to receive substantially higher average ratings.
+
+
+To assess whether this relationship persisted after accounting for other restaurant characteristics, a multivariate linear regression model was estimated including price range, primary cuisine type, and log-transformed customer votes as predictors of aggregate rating. The results indicated that customer engagement remained a strong and statistically significant predictor of ratings ($\beta$ = 0.31, $p < 0.001$), even after controlling for pricing and cuisine. In contrast, pricing and cuisine exhibited weaker and less consistent associations within the same model. The linear component of price range was negatively associated with ratings ($\beta$ = -0.19, $p = 0.001$), while Italian restaurants did not differ significantly from American restaurants ($p = 0.53$) and Mexican restaurants exhibited slightly lower ratings on average ($\beta$ = -0.14, $p = 0.012$).
+
+
+The model demonstrated substantial explanatory power, with an adjusted $R^2$ of $R^2_{adj} = 0.66$, indicating that approximately two-thirds of the variation in restaurant ratings within the US sample is explained by customer engagement and structural restaurant characteristics. Taken together, these findings indicate that customer engagement is not only strongly correlated with ratings but also represents the most influential predictor of perceived restaurant quality in the data set, exceeding the explanatory contribution of price range and cuisine type. 
+
+
+## **RQ4 (Exploratory): Service Features**
+
+
+Because service-related variables exhibited no variation within the US only subset of the data, an exploratory analysis was conducted using the full data set to examine whether service features are associated with customer ratings. Welch two-sample t-tests were used to compare mean aggregate ratings between restaurants offering online delivery and those that do not. The results indicated statistically significant differences for both service features. Restaurants without online delivery exhibited slightly higher average ratings (M = 3.47) than those offering online delivery (M = 3.38), $t = 6.33$, $p < 0.001$. The corresponding effect size was small (Cohen's $d = 0.16$, 95% CI: [0.11, 0.21]), indicating limited practical significance despite strong statistical evidence. In contrast, restaurants offering table booking demonstrated higher average ratings (M = 3.59) compared to those without reservations (M = 3.41), $t = -9.92$, $p < 0.001$, with a small-to-moderate effect size (Cohen's $d = -0.32$, 95% CI: [-0.38, -0.25]).
+
+To assess whether these associations persisted after accounting for customer engagement, a multivariate linear regression model was estimated including online delivery availability, reservation availability, and log-transformed customer votes as predictors of aggregate rating. Consistent with prior analyses, customer engagement emerged as the dominant predictor of ratings ($\beta$ = 0.25, $p < 0.0001$). After controlling for engagement, both online delivery ($\beta$ = -0.20, $p < 0.001$) and reservations ($\beta$ = -0.07, $p < 0.001$) were negatively associated with ratings. This reversal in the direction of the table booking coefficient suggests that the positive differences observed in univariate analyses are largely attributable to differences in engagement and restaurant characteristics rather than a direct effect of reservation availability itself. 
+
+Model diagnostics indicated no evidence of problematic multicolinearity (call variance inflation factors < 1.1). A Breusch-Pagan test, however, detected heteroskedasticity ($p < 0.001$), suggesting non-constant variance in the residuals. Given the large sample size and the consistency of coefficient estimates, the results were interpreted with an emphasis on effect sizes and directional patterns rather than strict reliance on standard errors. Overall, these findings indicate that while service features are statistically associated with customer ratings, their practical influence is modest and context-dependent, with customer engagement playing a substantially larger role in shaping perceived restaurant quality. 
+
+
+# **Business Implications**
+
+
+The results of this analysis suggest that customer ratings are influenced less by static restaurant attributes such as cuisine type or price positioning and more by factors related to customer engagement and operational context. Across both US focused and exploratory global analyses, customer engagement (as measured by the number of votes) consistently emerged as the strongest predictor of higher ratings, underscoring the importance of visibility, reputation, and sustained customer interaction in shaping perceived restaurant quality. 
+
+Exploratory analyses of service features indicate that restaurants offering reservations tend to received higher average ratings in raw comparisons, while restaurants offering online delivery receive slightly lower average ratings. However, multivariate results reveal that these associations are largely attenuated or reversed once customer engagement is taken into account. This suggests that service features such as reservations and delivery may function as proxies for restaurant type, operational complexity, or customer expectations rather than serving as independent drivers of customer satisfaction.
+
+From a business perspective, these findings imply that investments in service features alone are unlikely to meaningfully improve customer ratings without parallel efforts to drive engagement and maintain consistent service quality. Restaurants may benefit more from strategies that encourage repeat visits and customer feedback, such as loyalty initiatives, review prompts, or experience consistency, than from repositioning menus or expanding service offerings in isolation. While service features remain important for operational reasons, their impact on perceived quality appears to be context-dependent, reinforcing the value of data-informed decision-making when prioritizing operational and marketing initiatives. 
+
+
+# **Limitations**
+
+
+This analysis is subject to several limitations that should be considered when interpreting the results. First, the primary analyses focus on a US only subset of data to improve comparability across restaurants, however, service-related variable such as online delivery and reservations exhibited no variation within this subset. As a result, analyses of service features were conducted on the full data set and should be interpreted as exploratory, as they may reflect cross-country differences in restaurant formats, customer expectations, and platform usage.
+
+Second, the data are observational in nature, which limits the ability to draw conclusions. Although statistically significant associations were identified between service features and customer ratings, these relationships do not imply that service offerings directly influence perceived quality. In particular, multivariate results suggest that service features may act as proxies for restaurant type or operational complexity rather than independent drivers of ratings. 
+
+Third, customer ratings were tightly clustered within a relatively narrow range, introducing a ceiling effect that may reduce the sensitivity of statistical tests to detect meaningful differences across groups. Additionally, the data set lacks detailed operational metrics such as food costs, staffing levels, service times, or revenue, requiring the use of customer votes as a proxy for engagement and visibility. While engagement proved to be a strong predictor of ratings, it may also capture unobserved factors such as brand recognition or market presence. 
+
+Finally, diagnostic testing identified heteroskedasticity in the multivariate regression model, indicating non-constant variance in the residuals. Given the large sample size and the consistency of effect directions across analyses, results were interpreted with an emphasis on effect sizes and overall patterns rather than strict reliance on standard errors. Despite these limitations, the findings provide meaningful insight into the relative importance of engagement, operational context, and restaurant characteristics in shaping customer ratings. 
+
+
+# **Conclusion**
+
+
+This project investigated the relationship between restaurant characteristics and customer ratings using a publicly available restaurant data set, with primary analyses focused on US restaurants and supplementary exploratory analyses conducted on the full data set to examine service features. Across multiple analytical approaches, customer engagement emerged as the most consistent and influential predictor of restaurant ratings, while cuisine type and price range demonstrated limited or marginal associations. These findings suggets that perceived restaurant quality is shaped less by menu positioning and more by factors related to visibility, reputation, and sustained customer interaction. 
+
+Exploratory analyses of service features revealed statistically significant differences in ratings associated with online delivery and reservations availability in raw comparisons. However, once customer engagement was incorporated into multivariate models, these relationships were substantially attenuated or reversed, indicating that service features likely reflect broader restaurant characteristics and customer expectations rather than acting as independent drivers of satisfaction. This distinction highlights the importance of accounting for contextual and engagement-related factors when interpreting differences in customer ratings. 
+
+Overall, the results underscore the value of data-driven approaches in understanding consumer perceptions within the food and beverage industry. By demonstrating how raw association can change once key contextual variables are considered, this analysis emphasizes the need for careful interpretation of customer feedback data and provides a framework for more informed operational and strategic decision making. 
+
+
+
+
+
+
